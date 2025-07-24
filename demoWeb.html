@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Motor Control</title>
+    <style>
+        button {
+            width: 100px;
+            height: 50px;
+            margin: 5px;
+            font-size: 16px;
+        }
+
+        .row {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+
+        .motor {
+            margin: 20px;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            background-color: #f9f9f9;
+        }
+    </style>
+</head>
+
+<body>
+    <h2>Motor Control</h2>
+
+    <div class="motor">
+        <button onclick="cmd('/m1/cw', 'm1')">M1 CW</button>
+        <button onclick="cmd('/m1/ccw', 'm1')">M1 CCW</button>
+        <button onclick="cmd('/m1/stop', 'm1')">M1 Stop</button>
+        <form>
+            <label for="speed1">Speed (between 0 and 100):</label>
+            <input type="range" id="speed1" name="speed1" min="0" max="100">
+        </form>
+    </div>
+
+    <div class="motor">
+        <button onclick="cmd('/m2/cw', 'm2')">M2 CW</button>
+        <button onclick="cmd('/m2/ccw', 'm2')">M2 CCW</button>
+        <button onclick="cmd('/m2/stop', 'm2')">M2 Stop</button>
+        <form>
+            <label for="speed2">Speed (between 0 and 100):</label>
+            <input type="range" id="speed2" name="speed2" min="0" max="100">
+        </form>
+    </div>
+
+    <p>
+        M1 Status: <span id="m1status">Idle</span><br>
+        M2 Status: <span id="m2status">Idle</span>
+    </p>
+
+    <script>
+        function cmd(path, motor) {
+            fetch(path)
+                .then(r => r.text())
+                .then(t => {
+                    if (motor === 'm1') {
+                        document.getElementById('m1status').innerText = t;
+                    } else if (motor === 'm2') {
+                        document.getElementById('m2status').innerText = t;
+                    }
+                })
+                .catch(e => alert('Error: ' + e));
+        }
+    </script>
+</body>
+
+</html>
