@@ -16,10 +16,17 @@ String statusMsg = "Idle";
 
 WiFiServer server(80);
 
+// Custom command structure
+struct MotorCmd {
+  const char* path;
+  int motorID;
+  int pwm;
+  const char* msg;
+};
+
 const char *HTML_PAGE = R"rawliteral(
 <!DOCTYPE html>
 <html>
-
 <head>
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <title>Motor Control</title>
@@ -30,15 +37,13 @@ const char *HTML_PAGE = R"rawliteral(
             margin: 5px;
             font-size: 16px;
         }
-
         .row {
             display: flex;
             justify-content: center;
             gap: 10px;
             margin-bottom: 10px;
         }
-
-        .motor1, .motor2 {
+        .motor {
             margin: 20px;
             padding: 10px;
             border: 1px solid #ccc;
@@ -47,44 +52,46 @@ const char *HTML_PAGE = R"rawliteral(
         }
     </style>
 </head>
-
 <body>
     <h2>Motor Control</h2>
-
-    <div class="motor1">
+    <div class="motor">
         <button onclick="cmd('/m1/cw', 'm1')">M1 CW</button>
         <button onclick="cmd('/m1/ccw', 'm1')">M1 CCW</button>
         <button onclick="cmd('/m1/stop', 'm1')">M1 Stop</button>
         <form>
-            <label for="speed1">Speed (between 0 and 100):</label>
-            <input type="range" id="speed1" name="speed1" min="0" max="100">
+            <label for="speed1">Speed (0 to 100):</label>
+            <input type="range" id="speed1" min="0" max="100" value="25" oninput="updateSpeed('1')">
         </form>
     </div>
-    <div class="motor2">
+    <div class="motor">
         <button onclick="cmd('/m2/cw', 'm2')">M2 CW</button>
         <button onclick="cmd('/m2/ccw', 'm2')">M2 CCW</button>
         <button onclick="cmd('/m2/stop', 'm2')">M2 Stop</button>
         <form>
-            <label for="speed2">Speed (between 0 and 100):</label>
-            <input type="range" id="speed2" name="speed2" min="0" max="100">
+            <label for="speed2">Speed (0 to 100):</label>
+            <input type="range" id="speed2" min="0" max="100" value="25" oninput="updateSpeed('2')">
         </form>
     </div>
-
     <p>
         M1 Status: <span id="m1status">Idle</span><br>
         M2 Status: <span id="m2status">Idle</span>
     </p>
-
     <script>
         function cmd(path, motor) {
             fetch(path)
                 .then(r => r.text())
                 .then(t => {
-                    if (motor === 'm1') {
-                        document.getElementById('m1status').innerText = t;
-                    } else if (motor === 'm2') {
-                        document.getElementById('m2status').innerText = t;
-                    }
+                    document.getElementById(`${motor}status`).innerText = t;
+                })
+                .catch(e => alert('Error: ' + e));
+        }
+
+        function updateSpeed(motor) {
+            const speed = document.getElementById(`speed${motor}`).value;
+            fetch(`/m${motor}/speed/${speed}`)
+                .then(r => r.text())
+                .then(t => {
+                    document.getElementById(`m${motor}status`).innerText = t;
                 })
                 .catch(e => alert('Error: ' + e));
         }
@@ -93,26 +100,22 @@ const char *HTML_PAGE = R"rawliteral(
 </html>
 )rawliteral";
 
-void setup()
-{
+void setup() {
   SerialUSB.begin(9600);
-  WiFi.setPins(8, 2, A3, -1); // TinyZero
+  WiFi.setPins(8, 2, A3, -1); // TinyZero pin mapping
   Wire.begin();
 
-  if (motor.begin(MAX_PWM))
-  {
+  if (motor.begin(MAX_PWM)) {
     SerialUSB.println("Motor driver not detected!");
-    while (1)
-      ;
+    while (1);
   }
 
-  // connect to WiFi
-  while (WiFi.begin(ssid, pass) != WL_CONNECTED)
-  {
+  while (WiFi.begin(ssid, pass) != WL_CONNECTED) {
     SerialUSB.print("Connecting to ");
     SerialUSB.println(ssid);
     delay(3000);
   }
+
   SerialUSB.print("WiFi up, IP: ");
   SerialUSB.println(WiFi.localIP());
 
@@ -120,8 +123,7 @@ void setup()
   motor.setFailsafe(0);
 }
 
-void sendOK(WiFiClient &client, const char *msg)
-{
+void sendOK(WiFiClient &client, const char *msg) {
   client.println("HTTP/1.1 200 OK");
   client.println("Content-Type: text/plain");
   client.println("Connection: close");
@@ -129,75 +131,73 @@ void sendOK(WiFiClient &client, const char *msg)
   client.println(msg);
 }
 
-void loop()
-{
+void sendHTML(WiFiClient &client) {
+  client.println("HTTP/1.1 200 OK");
+  client.println("Content-Type: text/html");
+  client.println("Connection: close");
+  client.println();
+  client.println(HTML_PAGE);
+}
+
+bool handleMotorCommand(String &line, WiFiClient &client) {
+  MotorCmd commands[] = {
+    { "/m1/cw",   1,  pwmVal,  "M1 CW" },
+    { "/m1/ccw",  1, -pwmVal,  "M1 CCW" },
+    { "/m1/stop", 1,  0,       "M1 Stopped" },
+    { "/m2/cw",   2,  pwmVal,  "M2 CW" },
+    { "/m2/ccw",  2, -pwmVal,  "M2 CCW" },
+    { "/m2/stop", 2,  0,       "M2 Stopped" }
+  };
+
+  for (auto &cmd : commands) {
+    if (line.indexOf(cmd.path) >= 0) {
+      motor.setMotor(cmd.motorID, cmd.pwm);
+      statusMsg = cmd.msg;
+      sendOK(client, statusMsg.c_str());
+      return true;
+    }
+  }
+  return false;
+}
+
+bool handleSpeedCommand(String &line, WiFiClient &client) {
+  if (line.indexOf("/m1/speed/") >= 0) {
+    int speed = line.substring(line.indexOf("/m1/speed/") + 11).toInt();
+    pwmVal = map(speed, 0, 100, 0, MAX_PWM);
+    statusMsg = "M1 Speed set to " + String(speed) + "%";
+    sendOK(client, statusMsg.c_str());
+    return true;
+  }
+
+  if (line.indexOf("/m2/speed/") >= 0) {
+    int speed = line.substring(line.indexOf("/m2/speed/") + 11).toInt();
+    pwmVal = map(speed, 0, 100, 0, MAX_PWM);
+    statusMsg = "M2 Speed set to " + String(speed) + "%";
+    sendOK(client, statusMsg.c_str());
+    return true;
+  }
+
+  return false;
+}
+
+void loop() {
   WiFiClient client = server.available();
-  if (client)
-  {
+  if (client) {
     String line = "";
-    while (client.connected())
-    {
-      if (!client.available())
-        continue;
+    while (client.connected()) {
+      if (!client.available()) continue;
       char c = client.read();
       line += c;
-      if (c == '\n')
-      {
-        // blank line means end of headers → serve page
-        if (line.equals("\r\n"))
-        {
-          client.println("HTTP/1.1 200 OK");
-          client.println("Content-Type: text/html");
-          client.println("Connection: close");
-          client.println();
-          client.println(HTML_PAGE);
-          break;
-        }
-        // check our four endpoints
-        if (line.indexOf("GET /m1/cw") >= 0)
-        {
-          motor.setMotor(1, pwmVal);
-          statusMsg = "CW";
-          sendOK(client, statusMsg.c_str());
-          break;
-        }
-        if (line.indexOf("GET /m1/ccw") >= 0)
-        {
-          motor.setMotor(1, -pwmVal);
-          statusMsg = "CCW";
-          sendOK(client, statusMsg.c_str());
-          break;
-        }
-        if (line.indexOf("GET /m1/stop") >= 0)
-        {
-          motor.setMotor(1, 0);
-          statusMsg = "stop";
-          sendOK(client, statusMsg.c_str());
+
+      if (c == '\n') {
+        if (line == "\r\n") {
+          sendHTML(client);
           break;
         }
 
-        if (line.indexOf("GET /m2/cw") >= 0)
-        {
-          motor.setMotor(2, pwmVal);
-          statusMsg = "CCW";
-          sendOK(client, statusMsg.c_str());
-          break;
-        }
-        if (line.indexOf("GET /m2/ccw") >= 0)
-        {
-          motor.setMotor(2, -pwmVal);
-          statusMsg = "CCW";
-          sendOK(client, statusMsg.c_str());
-          break;
-        }
-        if (line.indexOf("GET /m2/stop") >= 0)
-        {
-          motor.setMotor(2, 0);
-          statusMsg = "stop";
-          sendOK(client, statusMsg.c_str());
-          break;
-        }
-        // otherwise keep reading headers
+        if (handleMotorCommand(line, client)) break;
+        if (handleSpeedCommand(line, client)) break;
+
         line = "";
       }
     }
